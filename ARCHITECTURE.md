@@ -41,7 +41,8 @@ httpRequest is instantiated in dav/lib/DAV/Server:__construct by HTTP\Sapi getRe
 body is a stream from php://input : what is the behavior if transfer is interrupted ?
 
 In sabre dav repo, digging updateFile and createFile from httpPut
-is the Node tree stuff free from race condition ? Where is the lock ? What if two requests come at the same time ? TODO
+is the Node tree stuff free from race condition ? Where is the lock ? What if two requests come at the same time ?
+=> Locking is implemented in custom file handling of NC, see the point on CachingTree
 Leaving create and update to the node object, now lets find which implem of it
 updateFile is Node put, maybe from lib/DAV/FS/File
 simple file_put_contents
@@ -53,3 +54,68 @@ WEIRD : https://github.com/sabre-io/dav/blob/7a736b73bea7040a7b6535fd92ff6de9981
 
 TODO: have a look at the ChunkingV2Plugin : maybe some chunk went missing in my photos...
 At first sight : why, oh why didn't you simply use HTTP ranges instead of this dirty hack...
+
+TODO: how does NC knows about things created by Sabre ? Does it know ? Is there any "background index" or do we have to use a "web view" to trigger some mechanisms ?
+
+It looks like there's a bunch of "reimplemented" Sabre classes in apps/dav/lib/Connector/Sabre : how to how which of them are in use VS original Sabre ?
+Sabre doesn't appear in composer requirements (only dev requirements), yet its namespace is being used. Where does it come from ?
+=> OK so I totally missed the fact that the CachingTree passed to the Sabre server constructor (in apps/dav/lib/Server) is in fact the NC implementation of the storage : it is at this point that NC's File handling is passed to Sabre
+
+Bulk upload app/dav/lib/BulkUpload/BulkUploadPlugin : folder instance comes from constructor
+the plugin is instanciated in apps/dav/lib/Server, the folder comes from \OC::$server->getUserFolder()
+I don't understand the \OC::$server syntax, but it looks like the method called is on lib/private/Server (EDIT: see below, OC is a class and a namespace...)
+Server extends ServerContainer which has a query method
+ServerContainer extends SimpleContainer->get => this->query
+query does some magic stuff to find instances, we probably get a LazyRoot from lib/private/Files/Node, which wraps Root
+Root uses Folder from lib/private/Files/Node/Folder, which is not the DAV folder...
+Folder uses View's file_put_contents from lib/private/Files/View
+=> Bulk upload is using non-dav file handling, without hash mechanism
+
+For chunks : uploaded with an upload id/chunk number
+HTTP_OC_CHUNKED / $this->request->getHeader('oc-chunked') involved
+OC_FileChunking::decodeName
+
+Check external storage (OC\Files\Storage\Common)
+
+Namespaces :
+- OC : OwnCloud ?
+    - /Core : files in core/ (core things :shrug:)
+    - /* : files in lib/private (libs, utilities, core things in fact :shrug:)
+- OCP : OwnCloud Public ?
+- OCA : OwnCloud App ?
+- Test : tests
+
+dependencies :
+- Sabre : DAV (file/calendar sync)
+- Icewind : SMB (file server)
+- ... (See https://github.com/nextcloud/3rdparty)
+
+
+Paths :
+- 3rdparty/ : PHP dependencies as a git submodule (https://github.com/nextcloud/3rdparty)
+- apps/ : NextCloud apps, note that some "core" features are implemented as apps (why some are core, some are apps, some are libs ?)
+- build/ : build stuff as in the name
+- config/ : some config samples
+- contribute/ : licence related instructions
+- core/ : core files, however I still need to figure out what is core and what is not (as I'm not even sure a build without any app is possible)
+- cypress/ : test suite
+- dist/ : most likely compiled frontend resources
+- lib/ : internal libraries, mostly
+    - composer/ : composer setup for the lib directory
+    - l10n/ : translations, but why in lib and not in some resource directory ? (or root dir ?)
+    - private/ : internal stuff, like a lot of thing
+    - public/ : interfaces, abstract stuff, used by private stuff, but what's the purpose ? probably hidding some lib-internal things to the rest of the system
+- LICENSES/ : license files
+- ocs/ : standors for Open Collaboration Service (https://www.open-collaboration-services.org/)
+- ocs-provider/ : ocs-provider entrypoint, don't know what it's used for
+- resources/ : resources for a framework ?
+- tests/ : well, tests
+- themes/ : UI themes to pimp NC
+- vendor-bin/ : probably composer related
+
+Notes :
+- The OCS things seem to be moving toward "App Framework". OCS seems to be legacy ?
+- \OC is a namespace, but also a class from lib/base.php. Thus \OC::$server is a static variable from the OC class. (WTF PHP ?!)
+- \OC::$server seems to have a class-based key-object store, many parts of the code magically request an object of some type from it
+
+What is OCM ?
