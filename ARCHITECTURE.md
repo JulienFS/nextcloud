@@ -117,5 +117,37 @@ Notes :
 - The OCS things seem to be moving toward "App Framework". OCS seems to be legacy ?
 - \OC is a namespace, but also a class from lib/base.php. Thus \OC::$server is a static variable from the OC class. (WTF PHP ?!)
 - \OC::$server seems to have a class-based key-object store, many parts of the code magically request an object of some type from it
+- OCM is Open Cloud Mesh (https://github.com/cs3org/OCM-API/)
+- routes are translated from name to controller : foo#bar to reference FooController::bar
 
-What is OCM ?
+Root libs (from lib/) are using apps code. While the opposite seems fine, such coupling is not ideal.
+It's clearly blurrying the lines of what's core and what's not.
+Same thing for \OC\* and \OC\Core : core should use libs to help, but ideally helpers should'nt use core internals.
+Not that this is not an absolute rule. Having to wrap every core class with some public interface that matches exactly it's signature would'nt be helpful.
+The distrinction between Core and root libs should be made clearer. Why is Core treated as a specific matter if it's only a part of the root lib ?
+
+In an ideal scenario, Core things should provide some inter-app communication plus backbone infrastructure.
+Then everything could be an app. But it looks like some efforts were made to try to appify some things while the vast
+majority of thing are in root lib.
+
+Autoloading is registered everywhere yet there's still a sort of single place registering listing in lib/private/Server.php. Maybe components should self register ?
+Using https://github.com/silexphp/Pimple to register services to the server.
+Why is Server called server as it's more like a utility holder than an actual server ?
+
+There are HTTP related things happening everywhere, but it's unclear if the final answer state is always going to be fine.
+Probably that some internal objects should be used all along the path, built from the requests, then a final object should buble up and be converted to HTTP
+answer at last. Obviously http objects should still be there in case someone needs to peek some data.
+
+The separation of concerns is not that clear. There are indeed services but they seem to all use each other.
+
+There's a lot of similar concepts with the same name (File, Node...). It blurs the lines (even if namespace differs, which makes it not that dramatic)
+
+There's only few class internal (private) helper methods. That would help to have a readable main code flow instead of overly verbose array manipulations.
+
+To some extent, the root lib/ is too flat. The structure of the repo doesn't reflect the structure of the execution.
+The fact that it's a flat list of features somehow hints toward a graph-like dependency structure : if it was a tree, it would probably appear as a dir tree.
+As an example : there a probably services that operated with a nice separation of concerns. They should be in a Services dir/namespace instead of being mixes with everything.
+
+In general, there's a global and common problem when it comes to ordering files : there are both grouped by what they are and what they are used for. There's no clear distinction of
+engine related things and engine usage. As an example : the AppFramework provides a middleware mechanism, which is cool, but inside the AppFramework dir, you can find some actual middleware
+implementations that provide features. The AppFramework should be core/framework/engine and the implementation/features should probably be in apps.
