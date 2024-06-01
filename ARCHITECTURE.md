@@ -151,3 +151,16 @@ As an example : there a probably services that operated with a nice separation o
 In general, there's a global and common problem when it comes to ordering files : there are both grouped by what they are and what they are used for. There's no clear distinction of
 engine related things and engine usage. As an example : the AppFramework provides a middleware mechanism, which is cool, but inside the AppFramework dir, you can find some actual middleware
 implementations that provide features. The AppFramework should be core/framework/engine and the implementation/features should probably be in apps.
+
+What is a node id ? It looks like it is stored in DB, node id looks like DB key of the filecache table.
+However there are some references that say that there can be many path per node id (see https://github.com/nextcloud/server/pull/43471).
+It might be related to "views" ?
+
+
+More investigations on upload:
+Bulk upload:
+    doesn't look as sophisticated as the regular upload. Some potential pitafalls
+Regular PUT sabre upload :
+    - didn't check the chunked version
+    - there's some legacy handling for storages implementing Storage instead of IWristeStreamStorage : maybe not needed
+    - part upload : default behavior is to store a part file first then move it to the final destination, but not always used for some backends (rationale is that some backends to this by themselves already)
