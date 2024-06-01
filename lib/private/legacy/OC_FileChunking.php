@@ -53,7 +53,7 @@ class OC_FileChunking {
 	public function store($index, $data) {
 		$cache = $this->getCache();
 		$name = $this->getPrefix().$index;
-		$cache->set($name, $data, $this->ttl);
+		$cache->set($name, $data, $this->ttl); // yes, don't check return status, because what could go wrong if data is a stream ?
 
 		return $cache->size($name);
 	}

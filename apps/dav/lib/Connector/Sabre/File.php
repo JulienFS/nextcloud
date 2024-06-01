@@ -106,6 +106,7 @@ class File extends Node implements IFile {
 	 * @return string|null
 	 */
 	public function put($data) {
+		// TODO: why not waiting for actual access to file to fail instead of trying to figure this out in the first place ?
 		try {
 			$exists = $this->fileView->file_exists($this->path);
 			if ($exists && !$this->info->isUpdateable()) {
@@ -115,9 +116,12 @@ class File extends Node implements IFile {
 			throw new ServiceUnavailable($this->l10n->t('File is not updatable: %1$s', [$e->getMessage()]));
 		}
 
-		// verify path of the target
+		// TODO: same as previously : maybe functions dealing with path should verify by themselves?
+		// verify path of the target : safeguard against specific cases such as dot files, empty files...
 		$this->verifyPath();
 
+		// TODO: chunked handling could probably use the regular handling once pieces are brought together
+		// TODO: is there any relationship between chunked and part files ?
 		// chunked handling
 		$chunkedHeader = $this->request->getHeader('oc-chunked');
 		if ($chunkedHeader) {
@@ -130,6 +134,7 @@ class File extends Node implements IFile {
 
 		/** @var Storage $partStorage */
 		[$partStorage] = $this->fileView->resolvePath($this->path);
+		// TODO: WTF is needs part file ? Its only for "common storage"
 		$needsPartFile = $partStorage->needsPartFile() && (strlen($this->path) > 1);
 
 		$view = \OC\Files\Filesystem::getView();
@@ -137,27 +142,29 @@ class File extends Node implements IFile {
 		if ($needsPartFile) {
 			// mark file as partial while uploading (ignored by the scanner)
 			$partFilePath = $this->getPartFileBasePath($this->path) . '.ocTransferId' . rand() . '.part';
+			// TODO: how safe is rand ? Maybe check for existence / lock the part file ?
 
-			if (!$view->isCreatable($partFilePath) && $view->isUpdatable($this->path)) {
+			// TODO: add setting to disable this : we don't want to loose file modification atomicity inadvertedly
+			if (!$view->isCreatable($partFilePath) && $view->isUpdatable($this->path)) { // If we cant create part but can update existing, don't use part
 				$needsPartFile = false;
 			}
 		}
 		if (!$needsPartFile) {
 			// upload file directly as the final path
-			$partFilePath = $this->path;
+			$partFilePath = $this->path; // reverse logic here : why do we consider that part file is the default ?
 
 			if ($view && !$this->emitPreHooks($exists)) {
 				throw new Exception($this->l10n->t('Could not write to final file, canceled by hook'));
 			}
 		}
 
-		// the part file and target file might be on a different storage in case of a single file storage (e.g. single file share)
+		// the part file and target file might be on a different storage in case of a single file storage (e.g. single file share) <= wtf is a single file storage ?
 		/** @var \OC\Files\Storage\Storage $partStorage */
 		[$partStorage, $internalPartPath] = $this->fileView->resolvePath($partFilePath);
 		/** @var \OC\Files\Storage\Storage $storage */
 		[$storage, $internalPath] = $this->fileView->resolvePath($this->path);
 		try {
-			if (!$needsPartFile) {
+			if (!$needsPartFile) { // if not a part file, lock sooner because we start writing to the final file directly
 				try {
 					$this->changeLock(ILockingProvider::LOCK_EXCLUSIVE);
 				} catch (LockedException $e) {
@@ -177,7 +184,7 @@ class File extends Node implements IFile {
 				}
 			}
 
-			if (!is_resource($data)) {
+			if (!is_resource($data)) { // We are writing to a tmp file if its not a file pointer. While it makes the rest of the code homogenous this is not that great for performance
 				$tmpData = fopen('php://temp', 'r+');
 				if ($data !== null) {
 					fwrite($tmpData, $data);
@@ -186,7 +193,7 @@ class File extends Node implements IFile {
 				$data = $tmpData;
 			}
 
-			if ($this->request->getHeader('X-HASH') !== '') {
+			if ($this->request->getHeader('X-HASH') !== '') { // TODO: check against all hashes handled by php and not a few hardcoded ones
 				$hash = $this->request->getHeader('X-HASH');
 				if ($hash === 'all' || $hash === 'md5') {
 					$data = HashWrapper::wrap($data, 'md5', function ($hash) {
@@ -216,7 +223,9 @@ class File extends Node implements IFile {
 				$result = true;
 				$count = -1;
 				try {
-					$count = $partStorage->writeStream($internalPartPath, $wrappedData);
+					// TODO: write then move ? At this point we dont know if writting to a final file or a part file
+					$count = $partStorage->writeStream($internalPartPath, $wrappedData); // stream able storage, lets write as stream
+					// TODO: where is write stream error handling ? we must dig
 				} catch (GenericFileException $e) {
 					$result = false;
 				} catch (BadGateway $e) {
@@ -224,13 +233,14 @@ class File extends Node implements IFile {
 				}
 
 
-				if ($result === false) {
-					$result = $isEOF;
-					if (is_resource($wrappedData)) {
-						$result = feof($wrappedData);
+				if ($result === false) { // if exception GenericFileException
+					$result = $isEOF; // now we check against the reached eof : result is true if eof
+					if (is_resource($wrappedData)) { // if its a file/stream
+						$result = feof($wrappedData); // now we are good if we reached end of file on wrapped data... this might not be enough to guarantee that the transfer was good
+						// TODO: stop this EOF sorcery and get a proper success indicator
 					}
 				}
-			} else {
+			} else { // Is there any storage that doesn't implement IWriteStreamStorage ? It looks like they all inherit from Common which implements IWriteStreamStorage (maybe external apps should migrate ?)
 				$target = $partStorage->fopen($internalPartPath, 'wb');
 				if ($target === false) {
 					\OC::$server->get(LoggerInterface::class)->error('\OC\Files\Filesystem::fopen() failed', ['app' => 'webdav']);
@@ -238,6 +248,7 @@ class File extends Node implements IFile {
 					throw new Exception($this->l10n->t('Could not write file contents'));
 				}
 				[$count, $result] = \OC_Helper::streamCopy($data, $target);
+				// TODO: dive into stream copy, see what result is based on
 				fclose($target);
 			}
 
@@ -247,7 +258,7 @@ class File extends Node implements IFile {
 				if ($lengthHeader) {
 					$expected = (int)$lengthHeader;
 				}
-				if ($expected !== 0) {
+				if ($expected !== 0) { // So if we fail the transfer but 0 length was expected it's OK ? maybe result should reflect more the sucess of underlying operation
 					throw new Exception(
 						$this->l10n->t(
 							'Error while copying file to target location (copied: %1$s, expected filesize: %2$s)',
@@ -289,6 +300,7 @@ class File extends Node implements IFile {
 				$partStorage->unlink($internalPartPath);
 			}
 			$this->convertToSabreException($e);
+			// TODO: maybe not hide throw inside the function ?
 		}
 
 		try {
@@ -338,6 +350,7 @@ class File extends Node implements IFile {
 			}
 
 			// since we skipped the view we need to scan and emit the hooks ourselves
+			// Why did we skip the view ?
 			$storage->getUpdater()->update($internalPath);
 
 			try {
@@ -376,6 +389,7 @@ class File extends Node implements IFile {
 			$this->refreshInfo();
 
 			$checksumHeader = $this->request->getHeader('oc-checksum');
+			// TODO: commmon, at least check against the computed hash if we have one instead of blindly trusting
 			if ($checksumHeader) {
 				$checksum = trim($checksumHeader);
 				$this->setChecksum($checksum);
@@ -572,7 +586,8 @@ class File extends Node implements IFile {
 		}
 
 		$chunk_handler = new \OC_FileChunking($info);
-		$bytesWritten = $chunk_handler->store($info['index'], $data);
+		$bytesWritten = $chunk_handler->store($info['index'], $data); // So this is the part where we write the chunk ? lets dig for result (no status, no exception so far : not looking good)
+		// oh boy, this is yet another storage thing (its a cache sitting on top of whatever)
 
 		//detect aborted upload
 		if ($this->request->getMethod() === 'PUT') {
@@ -580,7 +595,7 @@ class File extends Node implements IFile {
 			if ($lengthHeader) {
 				$expected = (int)$lengthHeader;
 				if ($bytesWritten !== $expected) {
-					$chunk_handler->remove($info['index']);
+					$chunk_handler->remove($info['index']); // So if a single chunk fails in length we just stop there and raise ? No cleanup ??
 					throw new BadRequest(
 						$this->l10n->t(
 							'Expected filesize of %1$s but read (from Nextcloud client) and wrote (to Nextcloud storage) %2$s. Could either be a network problem on the sending side or a problem writing to the storage on the server side.',
@@ -593,6 +608,7 @@ class File extends Node implements IFile {
 				}
 			}
 		}
+		// fun fun, the store operation could silently fail with a partial file, and if the client didnt provide a content lenght it would be totally ok
 
 		if ($chunk_handler->isComplete()) {
 			/** @var Storage $storage */
@@ -616,13 +632,13 @@ class File extends Node implements IFile {
 
 				if ($needsPartFile) {
 					// we first assembly the target file as a part file
-					$partFile = $this->getPartFileBasePath($path . '/' . $info['name']) . '.ocTransferId' . $info['transferid'] . '.part';
+					$partFile = $this->getPartFileBasePath($path . '/' . $info['name']) . '.ocTransferId' . $info['transferid'] . '.part'; // Same as for regular upload but worst ? transferId is not random, we shouldnt assume its safe from collision...
 					/** @var \OC\Files\Storage\Storage $targetStorage */
 					[$partStorage, $partInternalPath] = $this->fileView->resolvePath($partFile);
 
 
 					$chunk_handler->file_assemble($partStorage, $partInternalPath);
-
+					// TODO: checksum here
 					// here is the final atomic rename
 					$renameOkay = $targetStorage->moveFromStorage($partStorage, $partInternalPath, $targetInternalPath);
 					$fileExists = $targetStorage->file_exists($targetInternalPath);
@@ -662,7 +678,7 @@ class File extends Node implements IFile {
 				// FIXME: should call refreshInfo but can't because $this->path is not the of the final file
 				$info = $this->fileView->getFileInfo($targetPath);
 
-				$checksumHeader = $this->request->getHeader('oc-checksum');
+				$checksumHeader = $this->request->getHeader('oc-checksum'); // here too : blindly trusting user supplied hash, what could go wrong ?
 				if ($checksumHeader) {
 					$checksum = trim($checksumHeader);
 					$this->fileView->putFileInfo($targetPath, ['checksum' => $checksum]);
