@@ -94,6 +94,7 @@ class MultipartRequestParser {
 			throw new Exception('An error occurred while checking content');
 		}
 
+		// TODO: refactor : don't seek, especially backward, if not necessary (sane habit for performance reason)
 		$seekBackResult = fseek($this->stream, -$expectedContentLength, SEEK_CUR);
 		if ($seekBackResult === -1) {
 			throw new Exception('Unknown error while seeking content', Http::STATUS_INTERNAL_SERVER_ERROR);
@@ -134,7 +135,13 @@ class MultipartRequestParser {
 
 		$headers = $this->readPartHeaders();
 
-		$content = $this->readPartContent((int)$headers['content-length'], $headers['x-file-md5']);
+		if (!isset($headers['content-length'])) {
+			throw new LengthRequired('The Content-Length header must not be null.');
+		}
+		// TODO: should we also assert content-type ? multipart related can theorically contain... multipart related
+		// application/octet-stream
+
+		$content = $this->readPartContent((int)$headers['content-length']);
 
 		return [$headers, $content];
 	}
@@ -162,7 +169,10 @@ class MultipartRequestParser {
 	private function readPartHeaders(): array {
 		$headers = [];
 
+		// TODO: use a lib ? I don't want to overkill but having standard behavior is always welcomed
+		// Maybe enforce strict RFC2616 when it comes to duplicated headers : BAD REQUEST (maybe only if different values)
 		while (($line = fgets($this->stream)) !== "\r\n") {
+			// TODO: check for EOF or EOL ? if the stream gets interrupted we will have a partial header
 			if ($line === false) {
 				throw new Exception('An error occurred while reading headers of a part');
 			}
@@ -180,14 +190,6 @@ class MultipartRequestParser {
 			}
 		}
 
-		if (!isset($headers['content-length'])) {
-			throw new LengthRequired('The Content-Length header must not be null.');
-		}
-
-		if (!isset($headers['x-file-md5'])) {
-			throw new BadRequest('The X-File-MD5 header must not be null.');
-		}
-
 		return $headers;
 	}
 
@@ -197,13 +199,7 @@ class MultipartRequestParser {
 	 * @throws Exception
 	 * @throws BadRequest
 	 */
-	private function readPartContent(int $length, string $md5): string {
-		$computedMd5 = $this->computeMd5Hash($length);
-
-		if ($md5 !== $computedMd5) {
-			throw new BadRequest('Computed md5 hash is incorrect.');
-		}
-
+	private function readPartContent(int $length): string {
 		if ($length === 0) {
 			$content = '';
 		} else {
@@ -222,15 +218,5 @@ class MultipartRequestParser {
 		stream_get_contents($this->stream, 2);
 
 		return $content;
-	}
-
-	/**
-	 * Compute the MD5 hash of the next x bytes.
-	 */
-	private function computeMd5Hash(int $length): string {
-		$context = hash_init('md5');
-		hash_update_stream($context, $this->stream, $length);
-		fseek($this->stream, -$length, SEEK_CUR);
-		return hash_final($context);
 	}
 }
